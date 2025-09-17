@@ -5,7 +5,41 @@ const Post = mongoose.model("Post")
 const verifyLogin = require("../middleware/verifyLogin")
 require('dotenv').config();
 
-
+/**
+ * @swagger
+ * /posts:
+ *   get:
+ *     tags: [Posts]
+ *     summary: Get all posts
+ *     description: Retrieve all posts from all users
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Posts retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PostsResponse'
+ *       404:
+ *         description: No posts found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Unauthorized - Invalid or missing token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get("/posts", verifyLogin, (req, res) => {
     Post.find()
         .populate("postBy", "_id")
@@ -31,6 +65,47 @@ router.get("/posts", verifyLogin, (req, res) => {
         })
 })
 
+/**
+ * @swagger
+ * /create-post:
+ *   post:
+ *     tags: [Posts]
+ *     summary: Create a new post
+ *     description: Create a new post with title and body content
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreatePostRequest'
+ *     responses:
+ *       201:
+ *         description: Post created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/CreatePostResponse'
+ *       422:
+ *         description: Validation error - missing required fields
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Unauthorized - Invalid or missing token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.post("/create-post", verifyLogin, (req, res) => {
     const {title, body} = req.body
     if (!title || !body) {
@@ -66,6 +141,41 @@ router.post("/create-post", verifyLogin, (req, res) => {
         })
 })
 
+/**
+ * @swagger
+ * /myposts:
+ *   get:
+ *     tags: [Posts]
+ *     summary: Get current user's posts
+ *     description: Retrieve all posts created by the currently authenticated user
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: User posts retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PostsResponse'
+ *       404:
+ *         description: No posts found for this user
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Unauthorized - Invalid or missing token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get("/myposts", verifyLogin, (req, res) => {
     Post.find(
         {

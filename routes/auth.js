@@ -8,7 +8,39 @@ const {JWT_SECRET} = require("../keys")
 const verifyLogin = require("../middleware/verifyLogin")
 require('dotenv').config();
 
-
+/**
+ * @swagger
+ * /register:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Register a new user
+ *     description: Create a new user account with name, email, and password
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/RegisterRequest'
+ *     responses:
+ *       201:
+ *         description: User registered successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/RegisterResponse'
+ *       422:
+ *         description: Validation error or user already exists
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.post("/register", async (req, res) => {
     const {name, email, password} = req.body
     if (!name || !email || !password) {
@@ -57,6 +89,39 @@ router.post("/register", async (req, res) => {
     }
 })
 
+/**
+ * @swagger
+ * /login:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Login user
+ *     description: Authenticate user with email and password, returns JWT token
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/LoginRequest'
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/LoginResponse'
+ *       422:
+ *         description: Invalid credentials or validation error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Internal server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.post("/login", async (req, res) => {
     const {email, password} = req.body
     if (!email || !password) {
@@ -107,6 +172,30 @@ router.post("/login", async (req, res) => {
         })
 })
 
+/**
+ * @swagger
+ * /protected:
+ *   get:
+ *     tags: [Authentication]
+ *     summary: Test protected route
+ *     description: A test endpoint to verify JWT token authentication
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Protected route accessed successfully
+ *         content:
+ *           text/plain:
+ *             schema:
+ *               type: string
+ *               example: "Protected route"
+ *       401:
+ *         description: Unauthorized - Invalid or missing token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
 router.get("/protected", verifyLogin, async (req, res) => {
     res.send("Protected route")
 })
