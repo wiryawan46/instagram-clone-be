@@ -146,10 +146,16 @@ router.post("/login", async (req, res) => {
                 .then(isMatch => {
                     if (isMatch) {
                         const token = jwt.sign({userId: savedUser._id}, JWT_SECRET)
+                        const {_id,name, email} = savedUser
                         return res.json({
                             success: true,
                             message: "Login successful",
                             token: token,
+                            user: {
+                                _id,
+                                name,
+                                email
+                            }
                         })
                     } else {
                         return res.status(422).json({

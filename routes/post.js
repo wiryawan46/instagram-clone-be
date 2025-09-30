@@ -3,7 +3,20 @@ const router = express.Router();
 const mongoose = require("mongoose");
 const Post = mongoose.model("Post")
 const verifyLogin = require("../middleware/verifyLogin")
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const multer = require("multer");
 require('dotenv').config();
+const upload = multer({ storage: multer.memoryStorage() });
+
+const s3 = new S3Client({
+    region: process.env.MINIO_REGION,
+    endpoint: process.env.MINIO_ENDPOINT,
+    forcePathStyle: true, // wajib untuk MinIO
+    credentials: {
+        accessKeyId: process.env.MINIO_ACCESS_KEY,
+        secretAccessKey: process.env.MINIO_SECRET_KEY,
+    },
+});
 
 /**
  * @swagger
@@ -107,14 +120,15 @@ router.get("/posts", verifyLogin, (req, res) => {
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.post("/create-post", verifyLogin, (req, res) => {
-    const {title, body} = req.body
-    if (!title || !body) {
+    const {title, body, pic} = req.body
+    if (!title || !body || !pic) {
         return res.status(422).json({
             success: false,
             error: "All fields are required",
             fields: {
                 title: !title ? "Title is required" : null,
                 body: !body ? "Body is required" : null,
+                pic: !pic ? "Pic is required" : null,
             }
         })
     }
@@ -122,6 +136,7 @@ router.post("/create-post", verifyLogin, (req, res) => {
     const post = new Post({
         title,
         body,
+        pic,
         postBy: req.user
     })
     post.save().then((post) => {
@@ -199,5 +214,89 @@ router.get("/myposts", verifyLogin, (req, res) => {
             console.error("Error getting posts:", err)
         })
 })
+
+/**
+ * @swagger
+ * /upload:
+ *   post:
+ *     tags: [Posts]
+ *     summary: Upload a file to MinIO storage
+ *     description: Uploads a file to MinIO storage and returns the file URL
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - file
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: The file to upload
+ *     responses:
+ *       200:
+ *         description: File uploaded successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                   example: "✅ File Upload Success!"
+ *                 fileName:
+ *                   type: string
+ *                   example: "1632567890123_example.jpg"
+ *                 url:
+ *                   type: string
+ *                   example: "http://minio:9000/bucket-name/1632567890123_example.jpg"
+ *       400:
+ *         description: No file was uploaded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       401:
+ *         description: Unauthorized - Missing or invalid token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ *       500:
+ *         description: Server error during file upload
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/ErrorResponse'
+ */
+router.post("/upload", upload.single("file"), async (req, res) => {
+    try {
+        if (!req.file) {
+            return res.status(400).json({ error: "File not found" });
+        }
+
+        const params = {
+            Bucket: process.env.MINIO_BUCKET,
+            Key: `${Date.now()}_${req.file.originalname}`,
+            Body: req.file.buffer,
+            ContentType: req.file.mimetype,
+        };
+
+        await s3.send(new PutObjectCommand(params));
+
+        return res.json({
+            message: "✅ File Upload Success!",
+            fileName: params.Key,
+            url: `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${params.Key}`,
+        });
+    } catch (err) {
+        console.error("Upload error:", err);
+        res.status(500).json({ error: "Failed upload file" });
+    }
+});
 
 module.exports = router;
