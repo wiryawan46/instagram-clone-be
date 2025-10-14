@@ -193,7 +193,7 @@ router.post("/create-post", verifyLogin, (req, res) => {
 
 /**
  * @swagger
- * /myposts:
+ * /myposts:like and unli
  *   get:
  *     tags: [Posts]
  *     summary: Get current user's posts
@@ -240,10 +240,20 @@ router.get("/myposts", verifyLogin, (req, res) => {
                     error: "No posts found"
                 })
             }
+            const postsWithImageUrls = posts.map(post => {
+                if (post.photo) {
+                    return {
+                        ...post,
+                        imageUrl: `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${post.photo}`
+                    };
+                }
+                return post;
+            });
+
             res.status(200).json({
                 success: true,
-                posts
-            })
+                posts: postsWithImageUrls
+            });
         })
         .catch(err => {
             console.error("Error getting posts:", err)
@@ -383,5 +393,161 @@ router.get('/image/:filename', async (req, res) => {
         });
     }
 });
+
+/**
+ * @swagger
+ * /like-post:
+ *   put:
+ *     summary: Like a post
+ *     description: Adds the authenticated user's ID to the post's `likes` array.
+ *     tags:
+ *       - Posts
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - postId
+ *             properties:
+ *               postId:
+ *                 type: string
+ *                 description: The ID of the post to like (Mongo ObjectId).
+ *           example:
+ *             postId: "652f3f6b8f2a9d0012ab34cd"
+ *     responses:
+ *       200:
+ *         description: Post liked successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Post liked successfully
+ *                 post:
+ *                   type: object
+ *                   description: The updated post document.
+ *       401:
+ *         description: Unauthorized (missing or invalid token).
+ *       404:
+ *         description: Post not found.
+ *       500:
+ *         description: Server error while liking the post.
+ */
+
+router.put("/like-post", verifyLogin, (req, res) => {
+    Post.findByIdAndUpdate(req.body.postId, {
+        $push: {likes: req.user._id}
+    }, {
+        new: true
+    })
+        .then(post => {
+            if (!post) {
+                return res.status(404).json({
+                    success: false,
+                    error: "Post not found"
+                })
+            }
+            res.status(200).json({
+                success: true,
+                message: "Post liked successfully",
+                post
+            })
+        })
+        .catch(err => {
+            console.error("Error liking post:", err)
+            res.status(500).json({
+                success: false,
+                error: "Error liking post",
+                details: process.env.NODE_ENV === 'development' ? err.message : undefined
+            })
+        })
+})
+
+
+/**
+ * @swagger
+ * /unlike-post:
+ *   put:
+ *     summary: Unlike a post
+ *     description: Removes the authenticated user's ID from the post's `likes` array.
+ *     tags:
+ *       - Posts
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - postId
+ *             properties:
+ *               postId:
+ *                 type: string
+ *                 description: The ID of the post to unlike (Mongo ObjectId).
+ *           example:
+ *             postId: "652f3f6b8f2a9d0012ab34cd"
+ *     responses:
+ *       200:
+ *         description: Post unliked successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Post unliked successfully
+ *                 post:
+ *                   type: object
+ *                   description: The updated post document.
+ *       401:
+ *         description: Unauthorized (missing or invalid token).
+ *       404:
+ *         description: Post not found.
+ *       500:
+ *         description: Server error while unliking the post.
+ */
+router.put("/unlike-post", verifyLogin, (req, res) => {
+    Post.findByIdAndUpdate(req.body.postId, {
+        $pull: {likes: req.user._id}
+    }, {
+        new: true
+    })
+        .then(post => {
+            if (!post) {
+                return res.status(404).json({
+                    success: false,
+                    error: "Post not found"
+                })
+            }
+            res.status(200).json({
+                success: true,
+                message: "Post unliked successfully",
+                post
+            })
+        })
+        .catch(err => {
+            console.error("Error liking post:", err)
+            res.status(500).json({
+                success: false,
+                error: "Error unliking post",
+                details: process.env.NODE_ENV === 'development' ? err.message : undefined
+            })
+        })
+})
 
 module.exports = router;
