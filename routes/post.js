@@ -608,16 +608,14 @@ router.put("/unlike-post", verifyLogin, (req, res) => {
 router.put("/comment-post", verifyLogin, (req, res) => {
     const comment = {
         text:req.body.text,
-        postedBy: {
-            _id: req.user._id,
-            name: req.user.name
-        }
+        postedBy:req.user._id
     }
     Post.findByIdAndUpdate(req.body.id, {
         $push: {comments: comment}
     }, {
         new: true
     })
+        .populate("comments.postedBy", "_id name")
         .then(comm => {
             if (!comm) {
                 return res.status(404).json({
