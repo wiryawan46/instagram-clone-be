@@ -5,6 +5,10 @@ const postSchema = new mongoose.Schema({
     body: {type: String, required: true},
     photo: {type: String, default: "no photo"},
     likes: [{type: mongoose.Schema.Types.ObjectId, ref: "User"}],
+    comments: [{
+        text: String,
+        postedBy: {type: mongoose.Schema.Types.ObjectId, ref: "User"}
+    }],
     postBy: {type: mongoose.Schema.Types.ObjectId, ref: "User"},
     createdAt: {type: Date, default: Date.now}
 })

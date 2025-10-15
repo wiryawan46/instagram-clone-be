@@ -550,4 +550,38 @@ router.put("/unlike-post", verifyLogin, (req, res) => {
         })
 })
 
+router.put("/comment-post", verifyLogin, (req, res) => {
+    const comment = {
+        text:req.body.text,
+        postedByd:req.user._id
+    }
+    Post.findByIdAndUpdate(req.body.postId, {
+        $push: {comments: comment}
+    }, {
+        new: true
+    })
+        .populate("comments.postedBy", "_id name")
+        .then(post => {
+            if (!post) {
+                return res.status(404).json({
+                    success: false,
+                    error: "Post not found"
+                })
+            }
+            res.status(200).json({
+                success: true,
+                message: "Post comment successfully",
+                post
+            })
+        })
+        .catch(err => {
+            console.error("Error comment post:", err)
+            res.status(500).json({
+                success: false,
+                error: "Error comment post",
+                details: process.env.NODE_ENV === 'development' ? err.message : undefined
+            })
+        })
+})
+
 module.exports = router;
