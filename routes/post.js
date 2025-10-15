@@ -193,7 +193,7 @@ router.post("/create-post", verifyLogin, (req, res) => {
 
 /**
  * @swagger
- * /myposts:like and unli
+ * /myposts:
  *   get:
  *     tags: [Posts]
  *     summary: Get current user's posts
@@ -550,19 +550,76 @@ router.put("/unlike-post", verifyLogin, (req, res) => {
         })
 })
 
+/**
+ * @swagger
+ * /comment-post:
+ *   put:
+ *     summary: Add a comment to a post
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: header
+ *         name: Authorization
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "Bearer your_jwt_token_here"
+ *         description: JWT token for authentication
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - id
+ *               - text
+ *             properties:
+ *               id:
+ *                 type: string
+ *                 description: ID of the post to comment on
+ *               text:
+ *                 type: string
+ *                 description: Comment text content
+ *     responses:
+ *       200:
+ *         description: Comment added successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Post comment successfully"
+ *                 comm:
+ *                   $ref: '#/components/schemas/Post'
+ *       401:
+ *         $ref: '#/components/responses/UnauthorizedError'
+ *       404:
+ *         description: Post not found
+ *       500:
+ *         $ref: '#/components/responses/ServerError'
+ */
 router.put("/comment-post", verifyLogin, (req, res) => {
     const comment = {
         text:req.body.text,
-        postedByd:req.user._id
+        postedBy: {
+            _id: req.user._id,
+            name: req.user.name
+        }
     }
-    Post.findByIdAndUpdate(req.body.postId, {
+    Post.findByIdAndUpdate(req.body.id, {
         $push: {comments: comment}
     }, {
         new: true
     })
-        .populate("comments.postedBy", "_id name")
-        .then(post => {
-            if (!post) {
+        .then(comm => {
+            if (!comm) {
                 return res.status(404).json({
                     success: false,
                     error: "Post not found"
@@ -571,7 +628,7 @@ router.put("/comment-post", verifyLogin, (req, res) => {
             res.status(200).json({
                 success: true,
                 message: "Post comment successfully",
-                post
+                comm
             })
         })
         .catch(err => {
