@@ -1,38 +1,20 @@
 const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
-const Post = mongoose.model("Post")
-const verifyLogin = require("../middleware/verifyLogin")
-const { S3Client, PutObjectCommand, PutBucketPolicyCommand} = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+const Post = mongoose.model("Post");
+const verifyLogin = require("../middleware/verifyLogin");
+const {
+    S3Client,
+    PutObjectCommand,
+    PutBucketPolicyCommand,
+    DeleteObjectCommand,
+} = require("@aws-sdk/client-s3");
 const multer = require("multer");
-require('dotenv').config();
+require("dotenv").config();
+
 const upload = multer({ storage: multer.memoryStorage() });
 
-async function setPublicBucketPolicy() {
-    const policy = {
-        Version: "2012-10-17",
-        Statement: [{
-            Effect: "Allow",
-            Principal: { AWS: "*" },
-            Action: ["s3:GetObject"],
-            Resource: [`arn:aws:s3:::${process.env.MINIO_BUCKET}/*`]
-        }]
-    };
-
-    try {
-        await s3.send(new PutBucketPolicyCommand({
-            Bucket: process.env.MINIO_BUCKET,
-            Policy: JSON.stringify(policy)
-        }));
-        console.log("✅ Bucket policy set to public");
-    } catch (error) {
-        console.error("❌ Error setting bucket policy:", error.message);
-        if (error.name !== 'NoSuchBucket') {
-            console.error("Please check if the bucket exists and your MinIO credentials have sufficient permissions");
-        }
-    }
-}
+/* ----------------------------- Utils & Setup ----------------------------- */
 
 const s3 = new S3Client({
     region: process.env.MINIO_REGION,
@@ -44,8 +26,57 @@ const s3 = new S3Client({
     },
 });
 
-// Call the function to set the policy when the server starts
+const asyncHandler = (fn) => (req, res, next) =>
+    Promise.resolve(fn(req, res, next)).catch(next);
+
+const buildImageUrl = (key) =>
+    `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${key}`;
+
+const sendServerError = (res, label, err) => {
+    console.error(`${label}:`, err);
+    return res.status(500).json({
+        success: false,
+        error: label,
+        details:
+            process.env.NODE_ENV === "development" ? err?.message || String(err) : undefined,
+    });
+};
+
+async function setPublicBucketPolicy() {
+    const policy = {
+        Version: "2012-10-17",
+        Statement: [
+            {
+                Effect: "Allow",
+                Principal: { AWS: "*" },
+                Action: ["s3:GetObject"],
+                Resource: [`arn:aws:s3:::${process.env.MINIO_BUCKET}/*`],
+            },
+        ],
+    };
+
+    try {
+        await s3.send(
+            new PutBucketPolicyCommand({
+                Bucket: process.env.MINIO_BUCKET,
+                Policy: JSON.stringify(policy),
+            })
+        );
+        console.log("✅ Bucket policy set to public");
+    } catch (error) {
+        console.error("❌ Error setting bucket policy:", error.message);
+        if (error.name !== "NoSuchBucket") {
+            console.error(
+                "Please check if the bucket exists and your MinIO credentials have sufficient permissions"
+            );
+        }
+    }
+}
+
+// Set policy on server start (best effort)
 setPublicBucketPolicy().catch(console.error);
+
+/* --------------------------------- Routes -------------------------------- */
 
 /**
  * @swagger
@@ -59,59 +90,34 @@ setPublicBucketPolicy().catch(console.error);
  *     responses:
  *       200:
  *         description: Posts retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PostsResponse'
  *       404:
  *         description: No posts found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get("/posts", verifyLogin, async (req, res) => {
-    try {
-        const posts = await Post.find()
-            .populate("postBy", "_id name")
-            .lean();
+router.get(
+    "/posts",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const posts = await Post.find().populate("postBy", "_id name").lean();
 
         if (!posts || posts.length === 0) {
             return res.status(404).json({
                 success: false,
-                error: "No posts found"
+                error: "No posts found",
             });
         }
 
-        const postsWithImageUrls = posts.map(post => {
-            if (post.photo) {
-                return {
-                    ...post,
-                    imageUrl: `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${post.photo}`
-                };
-            }
-            return post;
-        });
+        const postsWithImageUrls = posts.map((post) =>
+            post.photo ? { ...post, imageUrl: buildImageUrl(post.photo) } : post
+        );
 
-        res.status(200).json({
+        return res.status(200).json({
             success: true,
-            posts: postsWithImageUrls
+            posts: postsWithImageUrls,
         });
-    } catch (err) {
-        console.error("Error fetching posts:", err);
-        res.status(500).json({
-            success: false,
-            error: "Error fetching posts",
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
-        });
-    }
-});
+    })
+);
 
 /**
  * @swagger
@@ -119,7 +125,7 @@ router.get("/posts", verifyLogin, async (req, res) => {
  *   post:
  *     tags: [Posts]
  *     summary: Create a new post
- *     description: Create a new post with title and body content
+ *     description: Create a new post with title, body, and photo key
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -127,69 +133,53 @@ router.get("/posts", verifyLogin, async (req, res) => {
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CreatePostRequest'
+ *             type: object
+ *             required: [title, body, photo]
+ *             properties:
+ *               title: { type: string }
+ *               body: { type: string }
+ *               photo: { type: string, description: "MinIO object key from /upload" }
  *     responses:
  *       201:
  *         description: Post created successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/CreatePostResponse'
  *       422:
- *         description: Validation error - missing required fields
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       401:
- *         description: Unauthorized - Invalid or missing token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
+ *         description: Validation error
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post("/create-post", verifyLogin, (req, res) => {
-    const {title, body, photo} = req.body
-    if (!title || !body || !photo) {
-        return res.status(422).json({
-            success: false,
-            error: "All fields are required",
-            fields: {
-                title: !title ? "Title is required" : null,
-                body: !body ? "Body is required" : null,
-                photo: !photo ? "Photo is required" : null,
-            }
-        })
-    }
-    req.user.password = undefined
-    const post = new Post({
-        title,
-        body,
-        photo,
-        postBy: req.user
-    })
-    post.save().then((post) => {
-        res.status(201).json({
+router.post(
+    "/create-post",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const { title, body, photo } = req.body;
+        if (!title || !body || !photo) {
+            return res.status(422).json({
+                success: false,
+                error: "All fields are required",
+                fields: {
+                    title: !title ? "Title is required" : null,
+                    body: !body ? "Body is required" : null,
+                    photo: !photo ? "Photo is required" : null,
+                },
+            });
+        }
+
+        const post = new Post({
+            title,
+            body,
+            photo,
+            postBy: req.user._id,
+        });
+
+        const saved = await post.save();
+
+        return res.status(201).json({
             success: true,
             message: "Post created successfully",
-            post
-        })
+            post: saved,
+        });
     })
-        .catch((err) => {
-            console.error("Error creating post:", err)
-            res.status(500).json({
-                success: false,
-                error: "Error creating post",
-                details: process.env.NODE_ENV === 'development' ? err.message : undefined
-            })
-        })
-})
+);
 
 /**
  * @swagger
@@ -203,62 +193,36 @@ router.post("/create-post", verifyLogin, (req, res) => {
  *     responses:
  *       200:
  *         description: User posts retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PostsResponse'
  *       404:
- *         description: No posts found for this user
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       401:
- *         description: Unauthorized - Invalid or missing token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
+ *         description: No posts found
  *       500:
  *         description: Internal server error
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.get("/myposts", verifyLogin, (req, res) => {
-    Post.find(
-        {
-            postBy: req.user._id
-        }
-    )
-        .populate("postBy", "_id name")
-        .then(posts => {
-            if (!posts) {
-                return res.status(404).json({
-                    success: false,
-                    error: "No posts found"
-                })
-            }
-            const postsWithImageUrls = posts.map(post => {
-                if (post.photo) {
-                    return {
-                        ...post,
-                        imageUrl: `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${post.photo}`
-                    };
-                }
-                return post;
-            });
+router.get(
+    "/myposts",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const posts = await Post.find({ postBy: req.user._id })
+            .populate("postBy", "_id name")
+            .lean();
 
-            res.status(200).json({
-                success: true,
-                posts: postsWithImageUrls
+        if (!posts || posts.length === 0) {
+            return res.status(404).json({
+                success: false,
+                error: "No posts found",
             });
-        })
-        .catch(err => {
-            console.error("Error getting posts:", err)
-        })
-})
+        }
+
+        const postsWithImageUrls = posts.map((post) =>
+            post.photo ? { ...post, imageUrl: buildImageUrl(post.photo) } : post
+        );
+
+        return res.status(200).json({
+            success: true,
+            posts: postsWithImageUrls,
+        });
+    })
+);
 
 /**
  * @swagger
@@ -275,58 +239,31 @@ router.get("/myposts", verifyLogin, (req, res) => {
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required:
- *               - file
+ *             required: [file]
  *             properties:
  *               file:
  *                 type: string
  *                 format: binary
- *                 description: The file to upload
  *     responses:
  *       200:
  *         description: File uploaded successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 message:
- *                   type: string
- *                   example: "✅ File Upload Success!"
- *                 fileName:
- *                   type: string
- *                   example: "1632567890123_example.jpg"
- *                 url:
- *                   type: string
- *                   example: "http://minio:9000/bucket-name/1632567890123_example.jpg"
  *       400:
  *         description: No file was uploaded
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
- *       401:
- *         description: Unauthorized - Missing or invalid token
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  *       500:
  *         description: Server error during file upload
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
  */
-router.post("/upload", upload.single("file"), async (req, res) => {
-    try {
+router.post(
+    "/upload",
+    upload.single("file"),
+    asyncHandler(async (req, res) => {
         if (!req.file) {
             return res.status(400).json({ error: "File not found" });
         }
 
+        const key = `${Date.now()}_${req.file.originalname}`;
         const params = {
             Bucket: process.env.MINIO_BUCKET,
-            Key: `${Date.now()}_${req.file.originalname}`,
+            Key: key,
             Body: req.file.buffer,
             ContentType: req.file.mimetype,
         };
@@ -335,14 +272,11 @@ router.post("/upload", upload.single("file"), async (req, res) => {
 
         return res.json({
             message: "✅ File Upload Success!",
-            fileName: params.Key,
-            url: `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${params.Key}`,
+            fileName: key,
+            url: buildImageUrl(key),
         });
-    } catch (err) {
-        console.error("Upload error:", err);
-        res.status(500).json({ error: "Failed upload file" });
-    }
-});
+    })
+);
 
 /**
  * @swagger
@@ -350,58 +284,34 @@ router.post("/upload", upload.single("file"), async (req, res) => {
  *   get:
  *     tags: [Posts]
  *     summary: Get an image from MinIO storage
- *     description: Streams an image file from MinIO storage
+ *     description: Redirects to the public image URL served by MinIO
  *     parameters:
  *       - in: path
  *         name: filename
  *         required: true
  *         schema:
  *           type: string
- *         description: The name of the image file to retrieve
  *     responses:
- *       200:
- *         description: Image file streamed successfully
- *         content:
- *           image/*:
- *             schema:
- *               type: string
- *               format: binary
- *       404:
- *         description: Image not found
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
+ *       302:
+ *         description: Redirect to image
  *       500:
- *         description: Error retrieving image
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/ErrorResponse'
+ *         description: Error generating image URL
  */
-router.get('/image/:filename', async (req, res) => {
-    try {
+router.get(
+    "/image/:filename",
+    asyncHandler(async (req, res) => {
         const { filename } = req.params;
-        const imageUrl = `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${filename}`;
-        res.redirect(imageUrl);
-    } catch (err) {
-        console.error('Error generating image URL:', err);
-        res.status(500).json({
-            success: false,
-            error: 'Error generating image URL',
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
-        });
-    }
-});
+        return res.redirect(buildImageUrl(filename));
+    })
+);
 
 /**
  * @swagger
  * /like-post:
  *   put:
+ *     tags: [Posts]
  *     summary: Like a post
- *     description: Adds the authenticated user's ID to the post's `likes` array.
- *     tags:
- *       - Posts
+ *     description: Adds the authenticated user's ID to the post's likes array
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -410,77 +320,44 @@ router.get('/image/:filename', async (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - postId
+ *             required: [postId]
  *             properties:
- *               postId:
- *                 type: string
- *                 description: The ID of the post to like (Mongo ObjectId).
- *           example:
- *             postId: "652f3f6b8f2a9d0012ab34cd"
+ *               postId: { type: string }
  *     responses:
- *       200:
- *         description: Post liked successfully.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: Post liked successfully
- *                 post:
- *                   type: object
- *                   description: The updated post document.
- *       401:
- *         description: Unauthorized (missing or invalid token).
- *       404:
- *         description: Post not found.
- *       500:
- *         description: Server error while liking the post.
+ *       200: { description: Post liked successfully }
+ *       404: { description: Post not found }
+ *       500: { description: Server error }
  */
+router.put(
+    "/like-post",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const { postId } = req.body;
+        const post = await Post.findByIdAndUpdate(
+            postId,
+            { $addToSet: { likes: req.user._id } },
+            { new: true }
+        );
 
-router.put("/like-post", verifyLogin, (req, res) => {
-    Post.findByIdAndUpdate(req.body.postId, {
-        $push: {likes: req.user._id}
-    }, {
-        new: true
+        if (!post) {
+            return res.status(404).json({ success: false, error: "Post not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Post liked successfully",
+            post,
+        });
     })
-        .then(post => {
-            if (!post) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Post not found"
-                })
-            }
-            res.status(200).json({
-                success: true,
-                message: "Post liked successfully",
-                post
-            })
-        })
-        .catch(err => {
-            console.error("Error liking post:", err)
-            res.status(500).json({
-                success: false,
-                error: "Error liking post",
-                details: process.env.NODE_ENV === 'development' ? err.message : undefined
-            })
-        })
-})
-
+);
 
 /**
  * @swagger
  * /unlike-post:
  *   put:
+ *     tags: [Posts]
  *     summary: Unlike a post
- *     description: Removes the authenticated user's ID from the post's `likes` array.
- *     tags:
- *       - Posts
+ *     description: Removes the authenticated user's ID from the post's likes array
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -489,154 +366,170 @@ router.put("/like-post", verifyLogin, (req, res) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - postId
+ *             required: [postId]
  *             properties:
- *               postId:
- *                 type: string
- *                 description: The ID of the post to unlike (Mongo ObjectId).
- *           example:
- *             postId: "652f3f6b8f2a9d0012ab34cd"
+ *               postId: { type: string }
  *     responses:
- *       200:
- *         description: Post unliked successfully.
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: Post unliked successfully
- *                 post:
- *                   type: object
- *                   description: The updated post document.
- *       401:
- *         description: Unauthorized (missing or invalid token).
- *       404:
- *         description: Post not found.
- *       500:
- *         description: Server error while unliking the post.
+ *       200: { description: Post unliked successfully }
+ *       404: { description: Post not found }
+ *       500: { description: Server error }
  */
-router.put("/unlike-post", verifyLogin, (req, res) => {
-    Post.findByIdAndUpdate(req.body.postId, {
-        $pull: {likes: req.user._id}
-    }, {
-        new: true
+router.put(
+    "/unlike-post",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const { postId } = req.body;
+        const post = await Post.findByIdAndUpdate(
+            postId,
+            { $pull: { likes: req.user._id } },
+            { new: true }
+        );
+
+        if (!post) {
+            return res.status(404).json({ success: false, error: "Post not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Post unliked successfully",
+            post,
+        });
     })
-        .then(post => {
-            if (!post) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Post not found"
-                })
-            }
-            res.status(200).json({
-                success: true,
-                message: "Post unliked successfully",
-                post
-            })
-        })
-        .catch(err => {
-            console.error("Error liking post:", err)
-            res.status(500).json({
-                success: false,
-                error: "Error unliking post",
-                details: process.env.NODE_ENV === 'development' ? err.message : undefined
-            })
-        })
-})
+);
 
 /**
  * @swagger
  * /comment-post:
  *   put:
- *     summary: Add a comment to a post
  *     tags: [Posts]
+ *     summary: Add a comment to a post
  *     security:
  *       - bearerAuth: []
- *     parameters:
- *       - in: header
- *         name: Authorization
- *         required: true
- *         schema:
- *           type: string
- *           example: "Bearer your_jwt_token_here"
- *         description: JWT token for authentication
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - id
- *               - text
+ *             required: [id, text]
  *             properties:
- *               id:
+ *               id: { type: string }
+ *               text: { type: string }
+ *     responses:
+ *       200: { description: Comment added successfully }
+ *       404: { description: Post not found }
+ *       500: { description: Server error }
+ */
+router.put(
+    "/comment-post",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const comment = {
+            text: req.body.text,
+            postedBy: req.user._id,
+        };
+
+        const comm = await Post.findByIdAndUpdate(
+            req.body.id,
+            { $push: { comments: comment } },
+            { new: true }
+        )
+            .populate("comments.postedBy", "_id name")
+            .populate("postBy", "_id name");
+
+        if (!comm) {
+            return res.status(404).json({ success: false, error: "Post not found" });
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Post comment successfully",
+            comm,
+        });
+    })
+);
+
+/**
+ * @swagger
+ * /delete-post:
+ *   delete:
+ *     tags: [Posts]
+ *     summary: Delete a post by ID
+ *     description: Deletes a post if the authenticated user is the author. Also attempts to delete the associated image from MinIO if present.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [postId]
+ *             properties:
+ *               postId:
  *                 type: string
- *                 description: ID of the post to comment on
- *               text:
- *                 type: string
- *                 description: Comment text content
+ *                 description: The ID of the post to delete
+ *           example:
+ *             postId: "652f3f6b8f2a9d0012ab34cd"
  *     responses:
  *       200:
- *         description: Comment added successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: "Post comment successfully"
- *                 comm:
- *                   $ref: '#/components/schemas/Post'
- *       401:
- *         $ref: '#/components/responses/UnauthorizedError'
+ *         description: Post deleted successfully
+ *       403:
+ *         description: Forbidden - Not the post owner
  *       404:
  *         description: Post not found
  *       500:
- *         $ref: '#/components/responses/ServerError'
+ *         description: Server error while deleting the post
  */
-router.put("/comment-post", verifyLogin, (req, res) => {
-    const comment = {
-        text:req.body.text,
-        postedBy:req.user._id
-    }
-    Post.findByIdAndUpdate(req.body.id, {
-        $push: {comments: comment}
-    }, {
-        new: true
-    })
-        .populate("comments.postedBy", "_id name")
-        .then(comm => {
-            if (!comm) {
-                return res.status(404).json({
-                    success: false,
-                    error: "Post not found"
-                })
-            }
-            res.status(200).json({
-                success: true,
-                message: "Post comment successfully",
-                comm
-            })
-        })
-        .catch(err => {
-            console.error("Error comment post:", err)
-            res.status(500).json({
+router.delete(
+    "/delete-post",
+    verifyLogin,
+    asyncHandler(async (req, res) => {
+        const { postId } = req.body;
+
+        const post = await Post.findById(postId);
+        if (!post) {
+            return res.status(404).json({ success: false, error: "Post not found" });
+        }
+
+        // Only author can delete
+        if (String(post.postBy) !== String(req.user._id)) {
+            return res.status(403).json({
                 success: false,
-                error: "Error comment post",
-                details: process.env.NODE_ENV === 'development' ? err.message : undefined
-            })
-        })
-})
+                error: "Forbidden: you are not the owner of this post",
+            });
+        }
+
+        // Try to delete image from MinIO (best-effort)
+        if (post.photo) {
+            try {
+                await s3.send(
+                    new DeleteObjectCommand({
+                        Bucket: process.env.MINIO_BUCKET,
+                        Key: post.photo,
+                    })
+                );
+            } catch (err) {
+                console.error("⚠️ Failed to delete MinIO object:", err?.message || err);
+                // continue anyway
+            }
+        }
+
+        await post.deleteOne();
+
+        return res.status(200).json({
+            success: true,
+            message: "Post deleted successfully",
+            postId,
+        });
+    })
+);
+
+/* ------------------------------- Error Trap ------------------------------ */
+
+router.use((err, req, res, next) => {
+    if (res.headersSent) return next(err);
+    return sendServerError(res, "Internal server error", err);
+});
 
 module.exports = router;
