@@ -22,6 +22,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
 // API routes
 app.use(require("./routes/auth"))
 app.use(require("./routes/post"))
+app.use(require("./routes/user"))
 
 
 mongoose.connect(MONGODB_URI, {

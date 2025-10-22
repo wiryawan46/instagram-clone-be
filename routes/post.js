@@ -4,77 +4,14 @@ const mongoose = require("mongoose");
 const Post = mongoose.model("Post");
 const verifyLogin = require("../middleware/verifyLogin");
 const {
-    S3Client,
+    s3,
     PutObjectCommand,
-    PutBucketPolicyCommand,
     DeleteObjectCommand,
-} = require("@aws-sdk/client-s3");
-const multer = require("multer");
-require("dotenv").config();
-
-const upload = multer({ storage: multer.memoryStorage() });
-
-/* ----------------------------- Utils & Setup ----------------------------- */
-
-const s3 = new S3Client({
-    region: process.env.MINIO_REGION,
-    endpoint: process.env.MINIO_ENDPOINT,
-    forcePathStyle: true,
-    credentials: {
-        accessKeyId: process.env.MINIO_ACCESS_KEY,
-        secretAccessKey: process.env.MINIO_SECRET_KEY,
-    },
-});
-
-const asyncHandler = (fn) => (req, res, next) =>
-    Promise.resolve(fn(req, res, next)).catch(next);
-
-const buildImageUrl = (key) =>
-    `${process.env.MINIO_ENDPOINT}/${process.env.MINIO_BUCKET}/${key}`;
-
-const sendServerError = (res, label, err) => {
-    console.error(`${label}:`, err);
-    return res.status(500).json({
-        success: false,
-        error: label,
-        details:
-            process.env.NODE_ENV === "development" ? err?.message || String(err) : undefined,
-    });
-};
-
-async function setPublicBucketPolicy() {
-    const policy = {
-        Version: "2012-10-17",
-        Statement: [
-            {
-                Effect: "Allow",
-                Principal: { AWS: "*" },
-                Action: ["s3:GetObject"],
-                Resource: [`arn:aws:s3:::${process.env.MINIO_BUCKET}/*`],
-            },
-        ],
-    };
-
-    try {
-        await s3.send(
-            new PutBucketPolicyCommand({
-                Bucket: process.env.MINIO_BUCKET,
-                Policy: JSON.stringify(policy),
-            })
-        );
-        console.log("✅ Bucket policy set to public");
-    } catch (error) {
-        console.error("❌ Error setting bucket policy:", error.message);
-        if (error.name !== "NoSuchBucket") {
-            console.error(
-                "Please check if the bucket exists and your MinIO credentials have sufficient permissions"
-            );
-        }
-    }
-}
-
-// Set policy on server start (best effort)
-setPublicBucketPolicy().catch(console.error);
+    upload,
+    asyncHandler,
+    buildImageUrl,
+    sendServerError,
+} = require("../utils/s3");
 
 /* --------------------------------- Routes -------------------------------- */
 
