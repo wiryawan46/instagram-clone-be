@@ -16,7 +16,12 @@ app.use(express.json())
 // Swagger UI setup
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(specs, {
     explorer: true,
-    customCss: '.swagger-ui .topbar { display: none }'
+    customCss: '.swagger-ui .topbar { display: none }',
+    persistAuthorization: true,
+    displayRequestDuration: true,
+    filter: true,
+    showExtensions: false,
+    showCommonExtensions: false
 }));
 
 // API routes
